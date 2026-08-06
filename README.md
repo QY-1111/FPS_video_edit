@@ -78,3 +78,20 @@ DownloadImageByUrl.url
 ```
 
 不需要再连接 `ParseJson`。`image_index` 为 `0` 时提取第一张图片，为 `1` 时提取第二张，以此类推。节点兼容标准 JSON、Python 字典文本以及被 HTTP 节点二次包装在 `data`、`result`、`response` 或 `body` 中的响应。
+
+## 图文模板 API 请求（动态文案）
+
+`视频 → API 工具 → 图文模板 API 请求（动态文案）` 会直接完成表单编码和 HTTP 请求，不再需要手工维护固定的 cURL。
+
+```text
+上游正文 STRING ─→ text                                response_body
+上游标题 STRING ─→ title（可选）  图文模板 API 请求 ───────────→ 提取图文接口 Image URL
+模板 ID / 宽 / 高 ─→ 节点控件                         http_status_code
+```
+
+- `template_id_list` 支持 JSON 数组、逗号分隔 ID 或单个 ID。
+- `title` 可以不连接，接口会收到空标题。
+- `text` 可直接接纯正文，也可接 `{"title":"...","body":"..."}`；节点会自动拆出标题和正文。中文字段 `标题`、`正文` 也支持。
+- 如果同时连接了可选的 `title` 输入，外部标题会覆盖 JSON 中的标题。
+- 节点每次排队都会重新请求，避免 ComfyUI 缓存已经过期的签名图片地址。
+- URL、Headers、时区和实验参数均使用 `business.py` 中的固定配置。
