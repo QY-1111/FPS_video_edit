@@ -62,3 +62,19 @@ Load Video 的 VIDEO ───────────────┐
 - 重复时间会自动去重。
 - 超出视频时长的时间会使用最后一帧，并在 ComfyUI 控制台显示提醒。
 - 当前输入类型针对截图里的 ComfyUI 原生 `Load Video`。如果使用 Video Helper Suite 的旧版加载节点并输出 `IMAGE`，请直接使用其图片批次，或先转换为原生 `VIDEO`。
+
+## 提取图文接口 Image URL
+
+插件还提供 `视频 → API 工具 → 提取图文接口 Image URL` 节点，用于解析文字图文接口的响应。
+
+连接方式：
+
+```text
+BA HTTP Request.body
+        ↓
+提取图文接口 Image URL
+        ↓
+DownloadImageByUrl.url
+```
+
+不需要再连接 `ParseJson`。`image_index` 为 `0` 时提取第一张图片，为 `1` 时提取第二张，以此类推。节点兼容标准 JSON、Python 字典文本以及被 HTTP 节点二次包装在 `data`、`result`、`response` 或 `body` 中的响应。
