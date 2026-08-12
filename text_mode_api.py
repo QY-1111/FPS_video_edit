@@ -26,10 +26,88 @@ DEFAULT_AB_PARAMS = [
     {"key": "is_support_reframe", "val": "true"},
 ]
 
+DECISION_KEYS = (
+    "是否应用文字模板",
+    "是否应用文字模版",
+    "是否应用图文模板",
+    "是否应用图文模版",
+    "use_text_template",
+    "use_image_text_template",
+)
+
 
 def _strip_markdown_fence(text: str) -> str:
     match = re.search(r"```(?:json|python)?\s*([\s\S]*?)\s*```", text, re.IGNORECASE)
     return match.group(1).strip() if match else text.strip()
+
+
+def _parse_json_like_object(value: Any, field_name: str) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+
+    text = _strip_markdown_fence(str(value or "").strip())
+    if not text:
+        return {}
+
+    candidates = [text]
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        candidates.append(text[start : end + 1])
+
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except (TypeError, ValueError):
+            try:
+                parsed = ast.literal_eval(candidate)
+            except (SyntaxError, ValueError):
+                continue
+        if isinstance(parsed, dict):
+            return parsed
+
+    raise ValueError(f"{field_name} 不是有效的 JSON 对象。")
+
+
+def should_request_text_template(decision_json: Any) -> bool:
+    """Return whether the API should run. Missing input preserves old behaviour."""
+    payload = _parse_json_like_object(decision_json, "决策 JSON")
+    if not payload:
+        return True
+
+    value = None
+    for key in DECISION_KEYS:
+        if key in payload:
+            value = payload[key]
+            break
+
+    # If the field is absent, preserve the previous request behaviour.
+    if value is None:
+        return True
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+
+    normalised = str(value).strip().lower()
+    if normalised in {"是", "true", "yes", "y", "1"}:
+        return True
+    if normalised in {"否", "false", "no", "n", "0"}:
+        return False
+    raise ValueError(
+        f"是否应用文字模板仅支持 是/否（或 true/false），当前值：{value!r}"
+    )
+
+
+def _silent_execution_blocker():
+    """Stop this branch without presenting an execution error in ComfyUI."""
+    try:
+        from comfy_execution.graph import ExecutionBlocker
+    except ImportError as exc:
+        raise RuntimeError(
+            "当前 ComfyUI 版本不支持安全跳过分支，请更新 ComfyUI。"
+        ) from exc
+    return ExecutionBlocker(None)
 
 
 def parse_text_and_title(value: Any, title: str = "") -> tuple[str, str]:
@@ -208,6 +286,17 @@ class TextModeTemplateApiRequest:
                 ),
             },
             "optional": {
+                "decision_json": (
+                    "STRING",
+                    {
+                        "forceInput": True,
+                        "multiline": True,
+                        "tooltip": (
+                            "连接视频判断 JSON。‘是否应用文字模板’为‘否’时，"
+                            "静默跳过本节点及后续 URL 提取、下载节点。"
+                        ),
+                    },
+                ),
                 "title": (
                     "STRING",
                     {
@@ -238,8 +327,13 @@ class TextModeTemplateApiRequest:
         width: int,
         height: int,
         timeout_seconds: int,
+        decision_json: str = "",
         title: str = "",
     ):
+        if not should_request_text_template(decision_json):
+            blocker = _silent_execution_blocker()
+            return (blocker, blocker)
+
         return post_text_mode_api(
             text=text,
             template_id_list=template_id_list,
