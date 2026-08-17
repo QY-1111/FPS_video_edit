@@ -20,6 +20,30 @@ def _as_rgb(images: torch.Tensor) -> torch.Tensor:
     return images[..., :3]
 
 
+def _prepend_cover_frame(
+    images: torch.Tensor,
+    cover_frame: torch.Tensor | None,
+) -> tuple[torch.Tensor, bool]:
+    """Prepend one optional cover frame, resizing it to match the image batch."""
+    images = _as_rgb(images)
+    if cover_frame is None:
+        return images, False
+
+    cover = _as_rgb(cover_frame)[:1]
+    target_height, target_width = images.shape[1:3]
+    cover = cover.to(device=images.device, dtype=images.dtype)
+    if cover.shape[1:3] != (target_height, target_width):
+        original_dtype = cover.dtype
+        cover = F.interpolate(
+            cover.permute(0, 3, 1, 2).float(),
+            size=(target_height, target_width),
+            mode="bilinear",
+            align_corners=False,
+        ).permute(0, 2, 3, 1).to(dtype=original_dtype)
+
+    return torch.cat((cover, images), dim=0), True
+
+
 def _analysis_gray(images: torch.Tensor, resolution: int) -> torch.Tensor:
     rgb = _as_rgb(images).detach().float().clamp(0.0, 1.0)
     gray = (
@@ -218,7 +242,13 @@ class SimilarFrameBestSelector:
                 "Laplacian权重": ("FLOAT", {"default": 0.35, "min": 0.0, "max": 1.0, "step": 0.05}),
                 "同分选择": (["中间帧", "靠前帧", "靠后帧"], {"default": "中间帧"}),
                 "分析分辨率": ("INT", {"default": 512, "min": 64, "max": 2048, "step": 64}),
-            }
+            },
+            "optional": {
+                "封面帧": (
+                    "IMAGE",
+                    {"tooltip": "可选。接入后会作为第 0 帧放在图像集前面，共同参与相似度合并和清晰度选择。"},
+                ),
+            },
         }
 
     RETURN_TYPES = ("IMAGE", "STRING", "STRING", "INT")
@@ -242,8 +272,10 @@ class SimilarFrameBestSelector:
         Laplacian权重: float,
         同分选择: str,
         分析分辨率: int,
+        封面帧: torch.Tensor | None = None,
     ):
-        images = _as_rgb(images)
+        image_set_count = int(images.shape[0]) if isinstance(images, torch.Tensor) and images.ndim == 4 else 0
+        images, has_cover_frame = _prepend_cover_frame(images, 封面帧)
         gray = _analysis_gray(images, 分析分辨率)
         similarity_gray = _crop_region(gray, 相似度检测区域)
         sharpness_gray = _crop_region(gray, 清晰度检测区域)
@@ -317,6 +349,13 @@ class SimilarFrameBestSelector:
 
         report = {
             "输入数量": int(images.shape[0]),
+            "图像集数量": image_set_count,
+            "封面帧已接入": has_cover_frame,
+            "索引说明": (
+                "封面帧为索引 0，原图像集从索引 1 开始"
+                if has_cover_frame
+                else "索引对应原图像集，从 0 开始"
+            ),
             "输出数量": len(selected),
             "保留索引": selected,
             "参数": {
